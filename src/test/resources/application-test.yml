@@ -1,0 +1,27 @@
+spring:
+  cloud:
+    discovery:
+      enabled: false
+  main:
+    allow-bean-definition-overriding: true
+feign:
+  client:
+    config:
+      default:
+        connectTimeout: 1000
+        readTimeout: 1000
+        loggerLevel: full
+services:
+  autenticacion:
+    url: http://localhost:${wiremock.server.port}
+  depositos:
+    url: http://localhost:${wiremock.server.port}
+  retiros:
+    url: http://localhost:${wiremock.server.port}
+  transferencias:
+    url: http://localhost:${wiremock.server.port}
+  consultas:
+    url: http://localhost:${wiremock.server.port}
+logging:
+  level:
+    com.aos.esb: DEBUG

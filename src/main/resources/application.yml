@@ -1,0 +1,58 @@
+server:
+  port: 8080
+
+services:
+  autenticacion:
+    url: http://127.0.0.1:8081
+  consultas:
+    url: http://127.0.0.1:8082
+  retiros:
+    url: http://127.0.0.1:8083
+  transferencias:
+    url: http://127.0.0.1:8084
+  depositos:
+    url: http://127.0.0.1:8085
+
+spring:
+  cloud:
+    discovery:
+      enabled: false
+  application:
+    name: aos-esb
+  output:
+    ansi:
+      enabled: always
+
+logging:
+  level:
+    com.aos.esb: DEBUG
+    com.aos.esb.outbound.rest: DEBUG
+    org.springframework.integration: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  endpoint:
+    health:
+      show-details: always
+  info:
+    env:
+      enabled: true
+
+feign:
+  client:
+    config:
+      default:
+        connectTimeout: 5000
+        readTimeout: 10000
+        loggerLevel: full
+
+info:
+  app:
+    name: ${spring.application.name}
+    version: 1.0.0
+    description: ESB para el Sistema Bancario AOS
+    java:
+      version: ${java.version}
