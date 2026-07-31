@@ -76,14 +76,17 @@ public class ESBOrquestadorImpl implements ESBOrquestadorPort
                 case "CONSULTA" -> procesarConsulta(header, body, usuarioId);
                 case "MOVIMIENTOS" -> procesarMovimientos(header, body, usuarioId);
                 case "CONSULTA_USUARIO" -> procesarConsultaUsuario(header, body, usuarioId);
+                case "CONSULTA_USUARIO_POR_CLABE" -> procesarConsultaUsuarioPorClabe(header, body, usuarioId);
                 case "CONSULTA_USUARIO_POR_TELEFONO" -> procesarConsultaUsuarioPorTelefono(header, body);
                 case "CONSULTA_CUENTAS_COMPLETAS" -> procesarConsultaCuentasCompletas(header, body, usuarioId);
+                case "GENERAR_CODIGO_RETIRO" -> procesarGenerarCodigoRetiro(header, body, usuarioId);
+                case "VALIDAR_CODIGO_RETIRO" -> procesarValidarCodigoRetiro(header, body, usuarioId);
                 default -> construirError(header, "400", "Operación no soportada: " + tipoOperacion);
             };
         }
         catch (Exception e)
         {
-            return construirError(header, "500", "Error interno del servidor: " + e.getMessage());
+            return construirError(header, "500", "Error interno del servidor: " + e.getMessage() + "\nLocalized Message:" + e.getLocalizedMessage());
         }
     }
 
@@ -185,6 +188,127 @@ public class ESBOrquestadorImpl implements ESBOrquestadorPort
         catch (Exception e)
         {
             return construirError(header, "500", "Error al obtener usuario por teléfono: " + e.getMessage());
+        }
+    }
+
+    private ESBResponse procesarGenerarCodigoRetiro(Header header, JsonNode body, Integer usuarioId)
+    {
+        if (usuarioId == null)
+            return construirError(header, "401", "Usuario no autenticado");
+
+        try
+        {
+            String url = consultasServiceUrl + "/api/v1/usuarios/" + usuarioId + "/generar-codigo-retiro";
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", "Bearer " + header.getToken());
+            HttpEntity<Void> entity = new HttpEntity<>(headers);
+
+            RestTemplate restTemplate = new RestTemplate();
+            ResponseEntity<GenerarCodigoRetiroResponse> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    entity,
+                    GenerarCodigoRetiroResponse.class
+            );
+
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null)
+                return construirExito(header, response.getBody().getMensaje(), response.getBody());
+            else
+                return construirError(header, "400", "Error al generar código de retiro");
+        }
+        catch (Exception e)
+        {
+            return construirError(header, "500", "Error al generar código: " + e.getMessage());
+        }
+    }
+
+    private ESBResponse procesarValidarCodigoRetiro(Header header, JsonNode body, Integer usuarioId)
+    {
+        if (body == null || !body.has("codigo"))
+            return construirError(header, "400", "El código es obligatorio");
+
+
+        String codigo = body.get("codigo").asText();
+        if (codigo == null || codigo.trim().isEmpty())
+            return construirError(header, "400", "El código es obligatorio");
+
+        try
+        {
+            String url = consultasServiceUrl + "/api/v1/usuarios/codigo/" + codigo.trim();
+            HttpHeaders headers = new HttpHeaders();
+            if (header.getToken() != null && !header.getToken().isEmpty())
+                headers.set("Authorization", "Bearer " + header.getToken());
+
+            HttpEntity<Void> entity = new HttpEntity<>(headers);
+
+            RestTemplate restTemplate = new RestTemplate();
+            ResponseEntity<UsuarioResponse> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.GET,
+                    entity,
+                    UsuarioResponse.class
+            );
+
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null)
+                return construirExito(header, "Código válido", response.getBody());
+            else
+                return construirError(header, "404", "Código inválido");
+        }
+        catch (Exception e)
+        {
+            return construirError(header, "500", "Error al validar código: " + e.getMessage());
+        }
+    }
+
+    private ESBResponse procesarConsultaUsuarioPorClabe(Header header, JsonNode body, Integer usuarioId)
+    {
+        if (body == null || !body.has("clabe"))
+            return construirError(header, "400", "La CLABE es obligatoria");
+
+        String clabe = body.get("clabe").asText();
+        if (clabe == null || clabe.trim().isEmpty())
+            return construirError(header, "400", "La CLABE es obligatoria");
+
+        try
+        {
+            HttpHeaders headers = new HttpHeaders();
+            if (header.getToken() != null && !header.getToken().isEmpty())
+                headers.set("Authorization", "Bearer " + header.getToken());
+            HttpEntity<Void> entity = new HttpEntity<>(headers);
+            RestTemplate restTemplate = new RestTemplate();
+
+            String urlCuenta = consultasServiceUrl + "/api/v1/cuentas/clabe/" + clabe.trim();
+            ResponseEntity<Map> responseCuenta = restTemplate.exchange(
+                    urlCuenta,
+                    HttpMethod.GET,
+                    entity,
+                    Map.class
+            );
+
+            if (!responseCuenta.getStatusCode().is2xxSuccessful() || responseCuenta.getBody() == null)
+                return construirError(header, "404", "Cuenta no encontrada para la CLABE: " + clabe);
+
+            Map<String, Object> cuentaData = responseCuenta.getBody();
+            Integer usuarioIdEncontrado = (Integer) cuentaData.get("UsuarioId");
+            if (usuarioIdEncontrado == null)
+                return construirError(header, "404", "La cuenta no tiene un usuario asociado");
+
+            String urlUsuario = consultasServiceUrl + "/api/v1/usuarios/" + usuarioIdEncontrado;
+            ResponseEntity<UsuarioResponse> responseUsuario = restTemplate.exchange(
+                    urlUsuario,
+                    HttpMethod.GET,
+                    entity,
+                    UsuarioResponse.class
+            );
+
+            if (responseUsuario.getStatusCode().is2xxSuccessful() && responseUsuario.getBody() != null)
+                return construirExito(header, "Usuario obtenido correctamente por CLABE", responseUsuario.getBody());
+            else
+                return construirError(header, "404", "Usuario no encontrado para la cuenta");
+        }
+        catch (Exception e)
+        {
+            return construirError(header, "500", "Error al obtener usuario por CLABE: " + e.getMessage());
         }
     }
 
