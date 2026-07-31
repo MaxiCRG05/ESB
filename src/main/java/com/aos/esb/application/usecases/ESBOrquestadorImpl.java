@@ -11,6 +11,7 @@ import com.aos.esb.domain.model.retiro.RetiroRequest;
 import com.aos.esb.domain.model.retiro.RetiroResponse;
 import com.aos.esb.domain.model.transferencia.TransferenciaRequest;
 import com.aos.esb.domain.model.transferencia.TransferenciaResponse;
+import com.aos.esb.domain.model.usuario.*;
 import com.aos.esb.domain.port.inbound.ESBOrquestadorPort;
 import com.aos.esb.domain.port.outbound.ConsultaPort;
 import com.aos.esb.domain.port.outbound.DepositoPort;
@@ -18,12 +19,27 @@ import com.aos.esb.domain.port.outbound.EjecucionTransferenciaPort;
 import com.aos.esb.domain.port.outbound.RetiroPort;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 @Service
 public class ESBOrquestadorImpl implements ESBOrquestadorPort
 {
+    @Value("${services.consultas.url}")
+    private String consultasServiceUrl;
     private final DepositoPort depositoPort;
     private final RetiroPort retiroPort;
     private final EjecucionTransferenciaPort transferenciaPort;
@@ -58,6 +74,10 @@ public class ESBOrquestadorImpl implements ESBOrquestadorPort
                 case "RETIRO" -> procesarRetiro(header, body, usuarioId);
                 case "TRANSFERENCIA" -> procesarTransferencia(header, body, usuarioId);
                 case "CONSULTA" -> procesarConsulta(header, body, usuarioId);
+                case "MOVIMIENTOS" -> procesarMovimientos(header, body, usuarioId);
+                case "CONSULTA_USUARIO" -> procesarConsultaUsuario(header, body, usuarioId);
+                case "CONSULTA_USUARIO_POR_TELEFONO" -> procesarConsultaUsuarioPorTelefono(header, body);
+                case "CONSULTA_CUENTAS_COMPLETAS" -> procesarConsultaCuentasCompletas(header, body, usuarioId);
                 default -> construirError(header, "400", "Operación no soportada: " + tipoOperacion);
             };
         }
@@ -88,19 +108,168 @@ public class ESBOrquestadorImpl implements ESBOrquestadorPort
         return construirExito(header, "Transferencia realizada con éxito", response);
     }
 
+    private ESBResponse procesarMovimientos(Header header, JsonNode body, Integer usuarioId)
+    {
+        ConsultaRequest consultaRequest = objectMapper.convertValue(body, ConsultaRequest.class);
+        ConsultaResponse response = consultaPort.ejecutarConsulta(consultaRequest);
+        return construirExito(header, response.getMensaje(), response.getDatos());
+    }
+
+    private ESBResponse procesarConsultaUsuario(Header header, JsonNode body, Integer usuarioId)
+    {
+        if (usuarioId == null)
+            return construirError(header, "401", "Usuario no autenticado");
+
+        try
+        {
+            String url = consultasServiceUrl + "/api/v1/usuarios/" + usuarioId;
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", "Bearer " + header.getToken());
+            HttpEntity<Void> entity = new HttpEntity<>(headers);
+
+            RestTemplate restTemplate = new RestTemplate();
+            ResponseEntity<UsuarioResponse> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.GET,
+                    entity,
+                    UsuarioResponse.class
+            );
+
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null)
+            {
+                UsuarioResponse usuario = response.getBody();
+                return construirExito(header, "Usuario obtenido correctamente", usuario);
+            }
+            else
+                return construirError(header, "404", "Usuario no encontrado");
+        }
+        catch (Exception e)
+        {
+            return construirError(header, "500", "Error al obtener usuario: " + e.getMessage());
+        }
+    }
+
+    private ESBResponse procesarConsultaUsuarioPorTelefono(Header header, JsonNode body)
+    {
+        try
+        {
+            if (body == null || !body.has("telefono"))
+                return construirError(header, "400", "El teléfono es obligatorio");
+
+            String telefono = body.get("telefono").asText();
+            if (telefono == null || telefono.isEmpty())
+                return construirError(header, "400", "El teléfono es obligatorio");
+
+            String url = consultasServiceUrl + "/api/v1/usuarios/telefono/" + telefono;
+            HttpHeaders headers = new HttpHeaders();
+            if (header.getToken() != null && !header.getToken().isEmpty())
+                headers.set("Authorization", "Bearer " + header.getToken());
+            HttpEntity<Void> entity = new HttpEntity<>(headers);
+
+            RestTemplate restTemplate = new RestTemplate();
+            ResponseEntity<UsuarioResponse> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.GET,
+                    entity,
+                    UsuarioResponse.class
+            );
+
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null)
+            {
+                UsuarioResponse usuario = response.getBody();
+                return construirExito(header, "Usuario obtenido correctamente por teléfono", usuario);
+            }
+            else
+                return construirError(header, "404", "Usuario no encontrado");
+        }
+        catch (Exception e)
+        {
+            return construirError(header, "500", "Error al obtener usuario por teléfono: " + e.getMessage());
+        }
+    }
+
+    private ESBResponse procesarConsultaCuentasCompletas(Header header, JsonNode body, Integer usuarioId)
+    {
+        if (usuarioId == null)
+            return construirError(header, "401", "Usuario no autenticado");
+
+        try
+        {
+            RestTemplate restTemplate = new RestTemplate();
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", "Bearer " + header.getToken());
+            HttpEntity<Void> entity = new HttpEntity<>(headers);
+
+            String urlCuentas = consultasServiceUrl + "/api/v1/cuentas/usuario/" + usuarioId;
+            ResponseEntity<List<Map<String, Object>>> responseCuentas = restTemplate.exchange(
+                    urlCuentas,
+                    HttpMethod.GET,
+                    entity,
+                    new ParameterizedTypeReference<List<Map<String, Object>>>() {}
+            );
+
+            if (!responseCuentas.getStatusCode().is2xxSuccessful() || responseCuentas.getBody() == null)
+                return construirError(header, "404", "No se encontraron cuentas para el usuario");
+
+            List<Map<String, Object>> cuentas = responseCuentas.getBody();
+            List<CuentaCompletaDTO> cuentasCompletas = new ArrayList<>();
+
+            for (Map<String, Object> cuentaData : cuentas)
+            {
+                CuentaCompletaDTO cuentaDTO = new CuentaCompletaDTO();
+                cuentaDTO.setId(((Number) cuentaData.get("Id")).intValue());
+                cuentaDTO.setClabe((String) cuentaData.get("CLABE"));
+                cuentaDTO.setSaldo(new BigDecimal(cuentaData.get("SaldoCantidad").toString()));
+                cuentaDTO.setMoneda((String) cuentaData.get("SaldoMoneda"));
+                cuentaDTO.setEstado((String) cuentaData.get("Estado"));
+
+                Integer cuentaId = cuentaDTO.getId();
+                String urlTarjetas = consultasServiceUrl + "/api/v1/tarjetas/cuenta/" + cuentaId;
+                ResponseEntity<List<Map<String, Object>>> responseTarjetas = restTemplate.exchange(
+                        urlTarjetas,
+                        HttpMethod.GET,
+                        entity,
+                        new ParameterizedTypeReference<List<Map<String, Object>>>() {}
+                );
+
+                List<TarjetaDTO> tarjetasDTO = new ArrayList<>();
+                if (responseTarjetas.getStatusCode().is2xxSuccessful() && responseTarjetas.getBody() != null)
+                {
+                    for (Map<String, Object> tarjetaData : responseTarjetas.getBody())
+                    {
+                        TarjetaDTO tarjetaDTO = new TarjetaDTO();
+                        tarjetaDTO.setId(((Number) tarjetaData.get("Id")).intValue());
+                        tarjetaDTO.setNumero((String) tarjetaData.get("Numero"));
+                        tarjetaDTO.setEstado((String) tarjetaData.get("Estado"));
+                        tarjetaDTO.setFechaExpiracion(tarjetaData.get("FechaExpiracion").toString());
+                        tarjetasDTO.add(tarjetaDTO);
+                    }
+                }
+                cuentaDTO.setTarjetas(tarjetasDTO);
+                cuentasCompletas.add(cuentaDTO);
+            }
+
+            Map<String, Object> datosRespuesta = new HashMap<>();
+            datosRespuesta.put("usuarioId", usuarioId);
+            datosRespuesta.put("cuentas", cuentasCompletas);
+
+            return construirExito(header, "Consulta de cuentas y tarjetas exitosa", datosRespuesta);
+        }
+        catch (Exception e)
+        {
+            return construirError(header, "500", "Error al obtener cuentas y tarjetas: " + e.getMessage());
+        }
+    }
+
     private ESBResponse procesarConsulta(Header header, JsonNode body, Integer usuarioId)
     {
         ConsultaRequest consultaRequest = objectMapper.convertValue(body, ConsultaRequest.class);
         ConsultaResponse response = consultaPort.ejecutarConsulta(consultaRequest);
 
         if (response.isExito())
-        {
             return construirExito(header, response.getMensaje(), response.getDatos());
-        }
         else
-        {
             return construirError(header, response.getCodigo(), response.getMensaje());
-        }
     }
 
     private ESBResponse construirExito(Header headerRequest, String mensaje, Object datos)
