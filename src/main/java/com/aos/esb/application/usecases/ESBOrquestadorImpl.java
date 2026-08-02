@@ -81,6 +81,7 @@ public class ESBOrquestadorImpl implements ESBOrquestadorPort
                 case "CONSULTA_CUENTAS_COMPLETAS" -> procesarConsultaCuentasCompletas(header, body, usuarioId);
                 case "GENERAR_CODIGO_RETIRO" -> procesarGenerarCodigoRetiro(header, body, usuarioId);
                 case "VALIDAR_CODIGO_RETIRO" -> procesarValidarCodigoRetiro(header, body, usuarioId);
+                case "EJECUTAR_RETIRO_SIN_TARJETA" -> procesarEjecutarRetiroSinTarjeta(header, body, usuarioId);
                 default -> construirError(header, "400", "Operación no soportada: " + tipoOperacion);
             };
         }
@@ -198,23 +199,25 @@ public class ESBOrquestadorImpl implements ESBOrquestadorPort
 
         try
         {
-            String url = consultasServiceUrl + "/api/v1/usuarios/" + usuarioId + "/generar-codigo-retiro";
+            GenerarCodigoRetiroRequest request = objectMapper.treeToValue(body, GenerarCodigoRetiroRequest.class);
+            if (request.getMonto() == null || request.getMonto().compareTo(BigDecimal.ZERO) <= 0)
+                return construirError(header, "400", "El monto debe ser mayor a cero");
+            if (request.getCuentaId() == null)
+                return construirError(header, "400", "El ID de la cuenta es obligatorio");
+
+            String url = consultasServiceUrl + "/api/v1/retiro-sin-tarjeta/solicitar/" + usuarioId;
             HttpHeaders headers = new HttpHeaders();
             headers.set("Authorization", "Bearer " + header.getToken());
-            HttpEntity<Void> entity = new HttpEntity<>(headers);
+            headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+            HttpEntity<GenerarCodigoRetiroRequest> entity = new HttpEntity<>(request, headers);
 
             RestTemplate restTemplate = new RestTemplate();
-            ResponseEntity<GenerarCodigoRetiroResponse> response = restTemplate.exchange(
-                    url,
-                    HttpMethod.POST,
-                    entity,
-                    GenerarCodigoRetiroResponse.class
-            );
+            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST, entity, Map.class);
 
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null)
-                return construirExito(header, response.getBody().getMensaje(), response.getBody());
+                return construirExito(header, "Código generado", response.getBody());
             else
-                return construirError(header, "400", "Error al generar código de retiro");
+                return construirError(header, "400", "Error al generar código");
         }
         catch (Exception e)
         {
@@ -222,31 +225,55 @@ public class ESBOrquestadorImpl implements ESBOrquestadorPort
         }
     }
 
+    private ESBResponse procesarEjecutarRetiroSinTarjeta(Header header, JsonNode body, Integer usuarioId)
+    {
+        if (body == null || !body.has("solicitudId"))
+            return construirError(header, "400", "solicitudId es obligatorio");
+        Integer solicitudId = body.get("solicitudId").asInt();
+
+        try
+        {
+            String url = consultasServiceUrl + "/api/v1/retiro-sin-tarjeta/ejecutar/" + solicitudId;
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", "Bearer " + header.getToken());
+            HttpEntity<Void> entity = new HttpEntity<>(headers);
+
+            RestTemplate restTemplate = new RestTemplate();
+            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.POST, entity, Map.class);
+
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null)
+                return construirExito(header, "Retiro sin tarjeta exitoso", response.getBody());
+            else
+                return construirError(header, "400", "Error al ejecutar retiro");
+        }
+        catch (Exception e)
+        {
+            return construirError(header, "500", "Error al ejecutar retiro: " + e.getMessage());
+        }
+    }
+
     private ESBResponse procesarValidarCodigoRetiro(Header header, JsonNode body, Integer usuarioId)
     {
         if (body == null || !body.has("codigo"))
             return construirError(header, "400", "El código es obligatorio");
-
-
         String codigo = body.get("codigo").asText();
         if (codigo == null || codigo.trim().isEmpty())
             return construirError(header, "400", "El código es obligatorio");
 
         try
         {
-            String url = consultasServiceUrl + "/api/v1/usuarios/codigo/" + codigo.trim();
+            String url = consultasServiceUrl + "/api/v1/retiro-sin-tarjeta/validar/" + codigo.trim();
             HttpHeaders headers = new HttpHeaders();
             if (header.getToken() != null && !header.getToken().isEmpty())
                 headers.set("Authorization", "Bearer " + header.getToken());
-
             HttpEntity<Void> entity = new HttpEntity<>(headers);
 
             RestTemplate restTemplate = new RestTemplate();
-            ResponseEntity<UsuarioResponse> response = restTemplate.exchange(
+            ResponseEntity<ValidarCodigoRetiroResponse> response = restTemplate.exchange(
                     url,
                     HttpMethod.GET,
                     entity,
-                    UsuarioResponse.class
+                    ValidarCodigoRetiroResponse.class
             );
 
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null)
